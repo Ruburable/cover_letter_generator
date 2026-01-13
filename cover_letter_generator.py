@@ -235,7 +235,7 @@ Create a cover letter that highlights the most relevant experience and skills fo
 
         return output_path
 
-    def batch_process(self, input_dir="input", model=None, pattern="*.txt"):
+    def batch_process(self, input_dir="input", model=None, pattern="*.txt", delete_after=False):
         """
         Process all job posting files in a directory.
 
@@ -243,6 +243,7 @@ Create a cover letter that highlights the most relevant experience and skills fo
             input_dir: Directory containing job posting files
             model: Ollama model to use
             pattern: File pattern to match (default: *.txt)
+            delete_after: Delete source files after successful processing (default: False)
 
         Returns:
             List of generated cover letter paths
@@ -259,18 +260,33 @@ Create a cover letter that highlights the most relevant experience and skills fo
         print("=" * 80)
 
         generated_files = []
+        processed_files = []
 
         for i, job_file in enumerate(job_files, 1):
             print(f"\n[{i}/{len(job_files)}]", end=" ")
             try:
                 output_path = self.process_job_file(job_file, model=model)
                 generated_files.append(output_path)
+                processed_files.append(job_file)
                 print(f"✓ Success")
             except Exception as e:
                 print(f"✗ Failed: {str(e)}")
 
+        # Delete source files if requested and processing was successful
+        if delete_after and processed_files:
+            print(f"\n{'=' * 80}")
+            print(f"Cleaning up processed files...")
+            for job_file in processed_files:
+                try:
+                    os.remove(job_file)
+                    print(f"  ✓ Deleted: {os.path.basename(job_file)}")
+                except Exception as e:
+                    print(f"  ✗ Failed to delete {os.path.basename(job_file)}: {str(e)}")
+
         print("\n" + "=" * 80)
         print(f"Batch processing complete: {len(generated_files)}/{len(job_files)} successful")
+        if delete_after:
+            print(f"Cleaned up: {len(processed_files)} source files deleted")
         print("=" * 80)
 
         return generated_files
@@ -295,6 +311,11 @@ def main():
         "--batch",
         action="store_true",
         help="Process all .txt files in input directory"
+    )
+    parser.add_argument(
+        "--delete-after",
+        action="store_true",
+        help="Delete job posting files after successful cover letter generation (use with --batch)"
     )
     parser.add_argument(
         "--input-dir",
@@ -348,7 +369,11 @@ def main():
 
     # Batch processing mode
     if args.batch:
-        generator.batch_process(input_dir=args.input_dir, model=selected_model)
+        generator.batch_process(
+            input_dir=args.input_dir,
+            model=selected_model,
+            delete_after=args.delete_after
+        )
         return
 
     # Single file processing mode

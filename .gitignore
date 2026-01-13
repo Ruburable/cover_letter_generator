@@ -69,3 +69,6 @@ offers/*
 
 output/*
 !output/.gitkeep
+
+bin/*
+!bin/.gitkeep
