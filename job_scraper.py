@@ -31,8 +31,72 @@ class JobScraper:
         cleaned_lines = [line.strip() for line in lines if line.strip()]
         return '\n'.join(cleaned_lines)
 
-    def _generate_filename(self, url):
-        """Generate a filename from URL."""
+    def _extract_job_title(self, soup):
+        """Try to extract job title from the page."""
+        # Common selectors for job titles
+        title_selectors = [
+            {'class': 'job-title'},
+            {'class': 'job-name'},
+            {'class': 'posting-headline'},
+            {'class': 'job-header'},
+            {'id': 'job-title'},
+            {'class': 'position-title'},
+        ]
+
+        for selector in title_selectors:
+            element = soup.find(**selector)
+            if element:
+                return element.get_text().strip()
+
+        # Try h1 tag (often contains job title)
+        h1 = soup.find('h1')
+        if h1:
+            return h1.get_text().strip()
+
+        # Try page title as fallback
+        title = soup.find('title')
+        if title:
+            title_text = title.get_text().strip()
+            # Remove common suffixes like "| Company Name" or "- Company"
+            title_text = title_text.split('|')[0].split('-')[0].strip()
+            return title_text
+
+        return None
+
+    def _sanitize_filename(self, text, max_length=50):
+        """Convert text to a safe filename."""
+        if not text:
+            return None
+
+        # Convert to lowercase and replace spaces with underscores
+        text = text.lower().replace(' ', '_')
+
+        # Remove special characters
+        safe_chars = []
+        for char in text:
+            if char.isalnum() or char in ['_', '-']:
+                safe_chars.append(char)
+
+        filename = ''.join(safe_chars)
+
+        # Truncate if too long
+        if len(filename) > max_length:
+            filename = filename[:max_length]
+
+        # Remove trailing underscores or hyphens
+        filename = filename.rstrip('_-')
+
+        return filename if filename else None
+
+    def _generate_filename(self, url, job_title=None):
+        """Generate a filename from job title or URL."""
+        if job_title:
+            safe_title = self._sanitize_filename(job_title)
+            if safe_title:
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                return f"{safe_title}_{timestamp}.txt"
+
+        # Fallback to URL-based name
         parsed = urlparse(url)
         domain = parsed.netloc.replace('www.', '')
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -57,6 +121,11 @@ class JobScraper:
             response.raise_for_status()
 
             soup = BeautifulSoup(response.content, 'html.parser')
+
+            # Extract job title first
+            job_title = self._extract_job_title(soup)
+            if job_title:
+                print(f"  Job title: {job_title}")
 
             # Remove script and style elements
             for script in soup(["script", "style", "nav", "header", "footer"]):
@@ -103,7 +172,8 @@ class JobScraper:
             return {
                 'url': url,
                 'content': content,
-                'success': True
+                'success': True,
+                'job_title': job_title
             }
 
         except requests.exceptions.RequestException as e:
@@ -150,7 +220,7 @@ class JobScraper:
 
             # Save individual file if requested and successful
             if save_individual and result['success']:
-                filename = self._generate_filename(url)
+                filename = self._generate_filename(result['url'], result.get('job_title'))
                 filepath = os.path.join(self.output_dir, filename)
                 self.save_content(result['content'], filepath)
 
