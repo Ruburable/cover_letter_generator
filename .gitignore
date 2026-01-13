@@ -1,3 +1,22 @@
+# Create .gitkeep files in each directory
+touch input/.gitkeep
+touch offers/.gitkeep
+touch output/.gitkeep
+
+# Add them to git
+git add input/.gitkeep offers/.gitkeep output/.gitkeep
+
+# Commit
+git commit -m "Add empty directories with .gitkeep files"
+
+# Push
+git push
+```
+
+## Update your `.gitignore`
+
+Also update your `.gitignore` to ignore files in these directories but keep the `.gitkeep` files:
+```
 # Environment variables
 .env
 *.env
@@ -41,6 +60,12 @@ wheels/
 .DS_Store
 Thumbs.db
 
-# Output files (optional - uncomment if you don't want to track generated letters)
-output/*.txt
-output/*.pdf
+# Ignore files in these directories but keep the directories
+input/*
+!input/.gitkeep
+
+offers/*
+!offers/.gitkeep
+
+output/*
+!output/.gitkeep
