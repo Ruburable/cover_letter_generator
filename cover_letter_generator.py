@@ -35,15 +35,15 @@ class CoverLetterGenerator:
             response = requests.get(f"{self.ollama_host}/api/tags", timeout=5)
             response.raise_for_status()
             models = response.json().get('models', [])
-            available_models = [m['name'] for m in models]
+            self.available_models = [m['name'] for m in models]
             print(f"✓ Connected to Ollama at {self.ollama_host}")
-            print(f"  Available models: {', '.join(available_models) if available_models else 'None'}")
+            print(f"  Available models: {', '.join(self.available_models) if self.available_models else 'None'}")
 
-            if self.default_model not in available_models:
+            if self.default_model not in self.available_models:
                 print(f"\n⚠ Warning: Model '{self.default_model}' not found.")
                 print(f"  Run: ollama pull {self.default_model}")
-                if available_models:
-                    print(f"  Or use one of: {', '.join(available_models)}")
+                if self.available_models:
+                    print(f"  Or use one of: {', '.join(self.available_models)}")
         except requests.exceptions.ConnectionError:
             print(f"✗ Error: Cannot connect to Ollama at {self.ollama_host}")
             print("  Make sure Ollama is running: ollama serve")
@@ -51,6 +51,42 @@ class CoverLetterGenerator:
         except Exception as e:
             print(f"✗ Error testing Ollama connection: {str(e)}")
             raise
+
+    def select_model_interactive(self):
+        """Interactive model selection from available models."""
+        if not hasattr(self, 'available_models') or not self.available_models:
+            print("No models available")
+            return self.default_model
+
+        print("\n" + "=" * 60)
+        print("SELECT MODEL")
+        print("=" * 60)
+
+        for i, model in enumerate(self.available_models, 1):
+            print(f"  [{i}] {model}")
+
+        print(f"\nDefault: {self.default_model}")
+
+        while True:
+            choice = input("\nEnter number (or press Enter for default): ").strip()
+
+            if not choice:
+                selected = self.default_model
+                break
+
+            try:
+                idx = int(choice) - 1
+                if 0 <= idx < len(self.available_models):
+                    selected = self.available_models[idx]
+                    break
+                else:
+                    print(f"Please enter a number between 1 and {len(self.available_models)}")
+            except ValueError:
+                print("Please enter a valid number")
+
+        print(f"\n✓ Selected model: {selected}")
+        print("=" * 60 + "\n")
+        return selected
 
     def _load_cv(self, cv_path):
         """Load CV content from file."""
@@ -278,7 +314,12 @@ def main():
     parser.add_argument(
         "--model",
         default=None,
-        help="Ollama model to use (default: llama3.2 or from OLLAMA_MODEL env var)"
+        help="Ollama model to use (default: interactive selection or from OLLAMA_MODEL env var)"
+    )
+    parser.add_argument(
+        "--interactive",
+        action="store_true",
+        help="Interactively select model before processing"
     )
     parser.add_argument(
         "--ollama-host",
@@ -299,14 +340,20 @@ def main():
         print(f"\nFailed to initialize generator: {str(e)}")
         return
 
+    # Interactive model selection
+    if args.interactive or (not args.model and not os.getenv("OLLAMA_MODEL")):
+        selected_model = generator.select_model_interactive()
+    else:
+        selected_model = args.model
+
     # Batch processing mode
     if args.batch:
-        generator.batch_process(input_dir=args.input_dir, model=args.model)
+        generator.batch_process(input_dir=args.input_dir, model=selected_model)
         return
 
     # Single file processing mode
     if args.job_file:
-        output_path = generator.process_job_file(args.job_file, model=args.model)
+        output_path = generator.process_job_file(args.job_file, model=selected_model)
         print(f"\nDone! Cover letter saved to: {output_path}")
         return
 
@@ -332,7 +379,7 @@ def main():
 
     # Generate cover letter
     print("\nGenerating cover letter...")
-    cover_letter = generator.generate_cover_letter(job_posting, model=args.model)
+    cover_letter = generator.generate_cover_letter(job_posting, model=selected_model)
 
     # Display result
     print("\n" + "=" * 80)
