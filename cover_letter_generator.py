@@ -10,14 +10,14 @@ import json
 class CoverLetterGenerator:
     """Generate tailored cover letters using Ollama local LLM based on CV and job postings."""
 
-    def __init__(self, cv_path="input/resume.tex", ollama_host="http://localhost:11434", model="llama3.2"):
+    def __init__(self, cv_path="input/resume.tex", ollama_host="http://localhost:11434", model="llama3.2:latest"):
         """
         Initialize the generator.
 
         Args:
             cv_path: Path to your CV file (default: input/resume.tex)
             ollama_host: Ollama server URL (default: http://localhost:11434)
-            model: Ollama model to use (default: llama3.2)
+            model: Ollama model to use (default: llama3.2:latest)
         """
         # Load environment variables from .env file
         load_dotenv()
@@ -120,6 +120,85 @@ class CoverLetterGenerator:
                 clean_lines.append(line)
 
         return '\n'.join(clean_lines)
+
+    def _extract_job_info(self, job_posting, model=None):
+        """
+        Extract company name and job position from job posting using LLM.
+
+        Args:
+            job_posting: The job posting text
+            model: Ollama model to use
+
+        Returns:
+            Dictionary with 'company' and 'position' keys
+        """
+        model = model or self.default_model
+
+        prompt = f"""Extract the company name and job position from this job posting. 
+Respond ONLY with a JSON object in this exact format with no additional text:
+{{"company": "Company Name", "position": "Job Position"}}
+
+Job Posting:
+{job_posting[:2000]}"""  # Limit text to avoid too long prompts
+
+        try:
+            response = requests.post(
+                f"{self.ollama_host}/api/generate",
+                json={
+                    "model": model,
+                    "prompt": prompt,
+                    "stream": False,
+                    "options": {
+                        "temperature": 0.1  # Low temperature for factual extraction
+                    }
+                },
+                timeout=30
+            )
+
+            response.raise_for_status()
+            result = response.json()
+            response_text = result.get('response', '').strip()
+
+            # Try to parse JSON from response
+            # Remove markdown code blocks if present
+            response_text = response_text.replace('```json', '').replace('```', '').strip()
+
+            import json as json_lib
+            info = json_lib.loads(response_text)
+
+            return {
+                'company': info.get('company', 'Unknown'),
+                'position': info.get('position', 'Unknown')
+            }
+
+        except Exception as e:
+            print(f"  Warning: Could not extract job info: {str(e)}")
+            return {'company': 'Unknown', 'position': 'Unknown'}
+
+    def _sanitize_filename_component(self, text):
+        """Sanitize text for use in filename."""
+        if not text or text == 'Unknown':
+            return 'Unknown'
+
+        # Convert to lowercase and replace spaces with hyphens
+        text = text.lower().replace(' ', '-')
+
+        # Remove special characters
+        safe_chars = []
+        for char in text:
+            if char.isalnum() or char == '-':
+                safe_chars.append(char)
+
+        filename = ''.join(safe_chars)
+
+        # Remove multiple consecutive hyphens
+        while '--' in filename:
+            filename = filename.replace('--', '-')
+
+        # Remove leading/trailing hyphens
+        filename = filename.strip('-')
+
+        return filename if filename else 'Unknown'
 
     def generate_cover_letter(self, job_posting, model=None, temperature=0.7):
         """
@@ -235,7 +314,7 @@ Create a cover letter that highlights the most relevant experience and skills fo
 
         return output_path
 
-    def batch_process(self, input_dir="input", model=None, pattern="*.txt", delete_after=False):
+    def batch_process(self, input_dir="input", model=None, pattern="*.txt", move_to_bin=False):
         """
         Process all job posting files in a directory.
 
@@ -243,7 +322,7 @@ Create a cover letter that highlights the most relevant experience and skills fo
             input_dir: Directory containing job posting files
             model: Ollama model to use
             pattern: File pattern to match (default: *.txt)
-            delete_after: Delete source files after successful processing (default: False)
+            move_to_bin: Move source files to bin/ after successful processing (default: False)
 
         Returns:
             List of generated cover letter paths
@@ -260,33 +339,70 @@ Create a cover letter that highlights the most relevant experience and skills fo
         print("=" * 80)
 
         generated_files = []
-        processed_files = []
+        files_to_move = []  # Store (source, destination) tuples
 
         for i, job_file in enumerate(job_files, 1):
             print(f"\n[{i}/{len(job_files)}]", end=" ")
             try:
+                # Read job posting
+                with open(job_file, 'r', encoding='utf-8') as f:
+                    job_posting = f.read()
+
+                # Extract job info for renaming
+                if move_to_bin:
+                    print(f"Extracting job info from: {os.path.basename(job_file)}")
+                    job_info = self._extract_job_info(job_posting, model=model)
+
+                    # Create new filename: company-position-date.txt
+                    company = self._sanitize_filename_component(job_info['company'])
+                    position = self._sanitize_filename_component(job_info['position'])
+                    date = datetime.now().strftime("%Y%m%d")
+                    new_filename = f"{company}-{position}-{date}.txt"
+
+                    print(f"  Renamed: {new_filename}")
+                else:
+                    new_filename = None
+
+                # Generate cover letter
                 output_path = self.process_job_file(job_file, model=model)
                 generated_files.append(output_path)
-                processed_files.append(job_file)
+
+                # Store for moving later (only if successful)
+                if move_to_bin and new_filename:
+                    files_to_move.append((job_file, new_filename))
+
                 print(f"✓ Success")
             except Exception as e:
                 print(f"✗ Failed: {str(e)}")
 
-        # Delete source files if requested and processing was successful
-        if delete_after and processed_files:
+        # Move source files to bin if requested
+        if move_to_bin and files_to_move:
+            bin_dir = "bin"
+            os.makedirs(bin_dir, exist_ok=True)
+
             print(f"\n{'=' * 80}")
-            print(f"Cleaning up processed files...")
-            for job_file in processed_files:
+            print(f"Moving processed files to bin/...")
+            for source_file, new_filename in files_to_move:
                 try:
-                    os.remove(job_file)
-                    print(f"  ✓ Deleted: {os.path.basename(job_file)}")
+                    dest_path = os.path.join(bin_dir, new_filename)
+
+                    # If file exists, add timestamp to make unique
+                    if os.path.exists(dest_path):
+                        base, ext = os.path.splitext(new_filename)
+                        timestamp = datetime.now().strftime("%H%M%S")
+                        dest_path = os.path.join(bin_dir, f"{base}_{timestamp}{ext}")
+
+                    # Move the file
+                    import shutil
+                    shutil.move(source_file, dest_path)
+                    print(f"  ✓ Moved: {os.path.basename(source_file)} → bin/{os.path.basename(dest_path)}")
                 except Exception as e:
-                    print(f"  ✗ Failed to delete {os.path.basename(job_file)}: {str(e)}")
+                    print(f"  ✗ Failed to move {os.path.basename(source_file)}: {str(e)}")
 
         print("\n" + "=" * 80)
         print(f"Batch processing complete: {len(generated_files)}/{len(job_files)} successful")
-        if delete_after:
-            print(f"Cleaned up: {len(processed_files)} source files deleted")
+        if move_to_bin:
+            print(f"Archived: {len(files_to_move)} files moved to bin/")
         print("=" * 80)
 
         return generated_files
@@ -313,9 +429,9 @@ def main():
         help="Process all .txt files in input directory"
     )
     parser.add_argument(
-        "--delete-after",
+        "--move-to-bin",
         action="store_true",
-        help="Delete job posting files after successful cover letter generation (use with --batch)"
+        help="Move job posting files to bin/ after successful cover letter generation (use with --batch)"
     )
     parser.add_argument(
         "--input-dir",
@@ -355,7 +471,7 @@ def main():
         generator = CoverLetterGenerator(
             cv_path=args.cv,
             ollama_host=args.ollama_host,
-            model=args.model or "llama3.2"
+            model=args.model or "llama3.2:latest"
         )
     except Exception as e:
         print(f"\nFailed to initialize generator: {str(e)}")
@@ -367,12 +483,20 @@ def main():
     else:
         selected_model = args.model
 
-    # Batch processing mode
-    if args.batch:
+    # Check if there are files in input directory to auto-process
+    input_files = glob.glob(os.path.join(args.input_dir, "*.txt"))
+    auto_batch = len(input_files) > 0 and not args.job_file and not args.job_text
+
+    # Batch processing mode (explicit or auto-detected)
+    if args.batch or auto_batch:
+        if auto_batch and not args.batch:
+            print(f"Found {len(input_files)} job posting(s) in {args.input_dir}/")
+            print("Starting automatic batch processing...\n")
+
         generator.batch_process(
             input_dir=args.input_dir,
             model=selected_model,
-            delete_after=args.delete_after
+            move_to_bin=args.move_to_bin
         )
         return
 
